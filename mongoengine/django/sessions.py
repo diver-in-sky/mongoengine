@@ -51,9 +51,7 @@ class SessionStore(SessionBase):
             return
 
     def save(self, must_create=False):
-        if self._session_key is None:
-            self.create()
-        s = MongoSession(session_key=self._session_key)
+        s = MongoSession(session_key=self._get_or_create_session_key())
         s.session_data = self.encode(self._get_session(no_load=must_create))
         s.expire_date = self.get_expiry_date()
         try:
