@@ -2,11 +2,48 @@
 Changelog
 =========
 
-Changes in 0.6.X
+Changes in 0.6.8
+================
+- Fixed FileField losing reference when no default set
+- Removed possible race condition from FileField (grid_file)
+- Added assignment to save, can now do: b = MyDoc(**kwargs).save()
+- Added support for pull operations on nested EmbeddedDocuments
+- Added support for choices with GenericReferenceFields
+- Added support for choices with GenericEmbeddedDocumentFields
+- Fixed Django 1.4 sessions first save data loss
+- FileField now automatically delete files on .delete()
+- Fix for GenericReference to_mongo method
+- Fixed connection regression
+- Updated Django User document, now allows inheritance
+
+Changes in 0.6.7
+================
+- Fixed indexing on '_id' or 'pk' or 'id'
+- Invalid data from the DB now raises a InvalidDocumentError
+- Cleaned up the Validation Error - docs and code
+- Added meta `auto_create_index` so you can disable index creation
+- Added write concern options to inserts
+- Fixed typo in meta for index options
+- Bug fix Read preference now passed correctly
+- Added support for File like objects for GridFS
+- Fix for #473 - Dereferencing abstracts
+
+Changes in 0.6.6
+================
+- Django 1.4 fixed (finally)
+- Added tests for Django
+
+Changes in 0.6.5
+================
+- More Django updates
+
+Changes in 0.6.4
 ================
 
-- updated replicasetconnection - pop port if exists
-- bug fix for unknown connection alias error message
+- Refactored connection / fixed replicasetconnection
+- Bug fix for unknown connection alias error message
+- Sessions support Django 1.3 and Django 1.4
+- Minor fix for ReferenceField
 
 Changes in 0.6.3
 ================

@@ -441,6 +441,9 @@ class GenericEmbeddedDocumentField(BaseField):
     :class:`~mongoengine.EmbeddedDocument` to be stored.
 
     Only valid values are subclasses of :class:`~mongoengine.EmbeddedDocument`.
+
+    ..note :: You can use the choices param to limit the acceptable
+    EmbeddedDocument types
     """
 
     def prepare_query_value(self, op, value):
@@ -613,6 +616,17 @@ class ReferenceField(BaseField):
       * CASCADE     - Deletes the documents associated with the reference.
       * DENY        - Prevent the deletion of the reference object.
 
+    Alternative syntax for registering delete rules (useful when implementing
+    bi-directional delete rules)
+
+    .. code-block:: python
+
+        class Bar(Document):
+            content = StringField()
+            foo = ReferenceField('Foo')
+
+        Bar.register_delete_rule(Foo, 'bar', NULLIFY)
+
     .. versionchanged:: 0.5 added `reverse_delete_rule`
     """
 
@@ -657,6 +671,9 @@ class ReferenceField(BaseField):
         return super(ReferenceField, self).__get__(instance, owner)
 
     def to_mongo(self, document):
+        if isinstance(document, DBRef):
+            return document
+
         id_field_name = self.document_type._meta['id_field']
         id_field = self.document_type._fields[id_field_name]
 
@@ -698,6 +715,8 @@ class GenericReferenceField(BaseField):
     ..note ::  Any documents used as a generic reference must be registered in the
     document registry.  Importing the model will automatically register it.
 
+    ..note :: You can use the choices param to limit the acceptable Document types
+
     .. versionadded:: 0.3
     """
 
@@ -731,6 +750,9 @@ class GenericReferenceField(BaseField):
     def to_mongo(self, document):
         if document is None:
             return None
+
+        if isinstance(document, (dict, SON)):
+            return document
 
         id_field_name = document.__class__._meta['id_field']
         id_field = document.__class__._fields[id_field_name]
@@ -872,10 +894,14 @@ class GridFSProxy(object):
         self.newfile.writelines(lines)
 
     def read(self, size=-1):
-        try:
-            return self.get().read(size)
-        except:
+        gridout = self.get()
+        if gridout is None:
             return None
+        else:
+            try:
+                return gridout.read(size)
+            except:
+                return ""
 
     def delete(self):
         # Delete file from GridFS, FileField still remains
@@ -920,19 +946,20 @@ class FileField(BaseField):
 
         # Check if a file already exists for this model
         grid_file = instance._data.get(self.name)
-        self.grid_file = grid_file
-        if isinstance(self.grid_file, self.proxy_class):
-            if not self.grid_file.key:
-                self.grid_file.key = self.name
-                self.grid_file.instance = instance
-            return self.grid_file
-        return self.proxy_class(key=self.name, instance=instance,
-                                db_alias=self.db_alias,
-                                collection_name=self.collection_name)
+        if not isinstance(grid_file, self.proxy_class):
+            grid_file = self.proxy_class(key=self.name, instance=instance,
+                                         db_alias=self.db_alias,
+                                         collection_name=self.collection_name)
+            instance._data[self.name] = grid_file
+
+        if not grid_file.key:
+            grid_file.key = self.name
+            grid_file.instance = instance
+        return grid_file
 
     def __set__(self, instance, value):
         key = self.name
-        if isinstance(value, file) or isinstance(value, str):
+        if (hasattr(value, 'read') and not isinstance(value, GridFSProxy)) or isinstance(value, str):
             # using "FileField() = file/string" notation
             grid_file = instance._data.get(self.name)
             # If a file already exists, delete it

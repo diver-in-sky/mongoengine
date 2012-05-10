@@ -25,7 +25,15 @@ class InvalidDocumentError(Exception):
 
 class ValidationError(AssertionError):
     """Validation exception.
+
+    May represent an error validating a field or a
+    document containing fields with validation errors.
+
+    :ivar errors: A dictionary of errors for fields within this
+        document or list, or None if the error is for an
+        individual field.
     """
+
     errors = {}
     field_name = None
     _message = None
@@ -43,10 +51,12 @@ class ValidationError(AssertionError):
 
     def __getattribute__(self, name):
         message = super(ValidationError, self).__getattribute__(name)
-        if name == 'message' and self.field_name:
-            return message + ' ("%s")' % self.field_name
-        else:
-            return message
+        if name == 'message':
+            if self.field_name:
+                message = '%s ("%s")' % (message, self.field_name)
+            if self.errors:
+                message = '%s:\n%s' % (message, self._format_errors())
+        return message
 
     def _get_message(self):
         return self._message
@@ -57,6 +67,13 @@ class ValidationError(AssertionError):
     message = property(_get_message, _set_message)
 
     def to_dict(self):
+        """Returns a dictionary of all errors within a document
+
+        Keys are field names or list indices and values are the
+        validation error messages, or a nested dictionary of
+        errors for an embedded document or list.
+        """
+
         def build_dict(source):
             errors_dict = {}
             if not source:
@@ -72,6 +89,21 @@ class ValidationError(AssertionError):
         if not self.errors:
             return {}
         return build_dict(self.errors)
+
+    def _format_errors(self):
+        """Returns a string listing all errors within a document"""
+
+        def format_error(field, value, prefix=''):
+            prefix = "%s.%s" % (prefix, field) if prefix else "%s" % field
+            if isinstance(value, dict):
+
+                return '\n'.join(
+                        [format_error(k, value[k], prefix) for k in value])
+            else:
+                return "%s: %s" % (prefix, value)
+
+        return '\n'.join(
+                [format_error(k, v) for k, v in self.to_dict().items()])
 
 
 _document_registry = {}
@@ -191,16 +223,18 @@ class BaseField(object):
         pass
 
     def _validate(self, value):
-
+        from mongoengine import Document, EmbeddedDocument
         # check choices
         if self.choices:
+            is_cls = isinstance(value, (Document, EmbeddedDocument))
+            value_to_check = value.__class__ if is_cls else value
+            err_msg = 'an instance' if is_cls else 'one'
             if isinstance(self.choices[0], (list, tuple)):
                 option_keys = [option_key for option_key, option_value in self.choices]
-                if value not in option_keys:
-                    self.error('Value must be one of %s' % unicode(option_keys))
-            else:
-                if value not in self.choices:
-                    self.error('Value must be one of %s' % unicode(self.choices))
+                if value_to_check not in option_keys:
+                    self.error('Value must be %s of %s' % (err_msg, unicode(option_keys)))
+            elif value_to_check not in self.choices:
+                self.error('Value must be %s of %s' % (err_msg, unicode(self.choices)))
 
         # check validation argument
         if self.validation is not None:
@@ -368,7 +402,7 @@ class ComplexBaseField(BaseField):
                 sequence = enumerate(value)
             for k, v in sequence:
                 try:
-                    self.field.validate(v)
+                    self.field._validate(v)
                 except (ValidationError, AssertionError), error:
                     if hasattr(error, 'errors'):
                         errors[k] = error.errors
@@ -584,6 +618,10 @@ class DocumentMetaclass(type):
                     raise InvalidDocumentError("Reverse delete rules are not supported for EmbeddedDocuments (field: %s)" % field.name)
                 f.document_type.register_delete_rule(new_class, field.name, delete_rule)
 
+            proxy_class = getattr(field, 'proxy_class', None)
+            if proxy_class is not None:
+                new_class.register_proxy_field(field.name, proxy_class)
+
             if field.name and hasattr(Document, field.name) and EmbeddedDocument not in new_class.mro():
                 raise InvalidDocumentError("%s is a document method and not a valid field name" % field.name)
 
@@ -685,6 +723,7 @@ class TopLevelDocumentMetaclass(DocumentMetaclass):
             'index_opts': {},
             'queryset_class': QuerySet,
             'delete_rules': {},
+            'proxy_fields': {},
             'allow_inheritance': True
         }
 
@@ -947,8 +986,8 @@ class BaseDocument(object):
         """
         # get the class name from the document, falling back to the given
         # class if unavailable
-        class_name = son.get(u'_cls', cls._class_name)
-        data = dict((str(key), value) for key, value in son.items())
+        class_name = son.get('_cls', cls._class_name)
+        data = dict(("%s" % key, value) for key, value in son.items())
 
         if '_types' in data:
             del data['_types']
@@ -961,11 +1000,16 @@ class BaseDocument(object):
             cls = get_document(class_name)
 
         changed_fields = []
+        errors_dict = {}
+
         for field_name, field in cls._fields.items():
             if field.db_field in data:
                 value = data[field.db_field]
-                data[field_name] = (value if value is None
+                try:
+                    data[field_name] = (value if value is None
                                     else field.to_python(value))
+                except (AttributeError, ValueError), e:
+                    errors_dict[field_name] = e
             elif field.default:
                 default = field.default
                 if callable(default):
@@ -973,7 +1017,13 @@ class BaseDocument(object):
                 if isinstance(default, BaseDocument):
                     changed_fields.append(field_name)
 
+        if errors_dict:
+            errors = "\n".join(["%s - %s" % (k, v) for k, v in errors_dict.items()])
+            raise InvalidDocumentError("""
+Invalid data to create a `%s` instance.\n%s""".strip() % (cls._class_name, errors))
+
         obj = cls(**data)
+
         obj._changed_fields = changed_fields
         obj._created = False
         return obj

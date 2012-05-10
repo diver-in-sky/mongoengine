@@ -74,6 +74,12 @@ class Document(BaseDocument):
     names. Index direction may be specified by prefixing the field names with
     a **+** or **-** sign.
 
+    Automatic index creation can be disabled by specifying
+    attr:`auto_create_index` in the :attr:`meta` dictionary. If this is set to
+    False then indexes will not be created by MongoEngine.  This is useful in
+    production systems where index creation is performed as part of a deployment
+    system.
+
     By default, _types will be added to the start of every index (that
     doesn't contain a list) if allow_inheritence is True. This can be
     disabled by either setting types to False on the specific index or
@@ -147,8 +153,9 @@ class Document(BaseDocument):
                 :meth:`~pymongo.collection.Collection.save` OR
                 :meth:`~pymongo.collection.Collection.insert`
                 which will be used as options for the resultant ``getLastError`` command.
-                For example, ``save(..., w=2, fsync=True)`` will wait until at least two servers
-                have recorded the write and will force an fsync on each server being written to.
+                For example, ``save(..., write_options={w: 2, fsync: True}, ...)`` will
+                wait until at least two servers have recorded the write and will force an
+                fsync on each server being written to.
         :param cascade: Sets the flag for cascading saves.  You can set a default by setting
             "cascade" in the document __meta__
         :param cascade_kwargs: optional kwargs dictionary to be passed throw to cascading saves
@@ -226,6 +233,7 @@ class Document(BaseDocument):
         self._changed_fields = []
         self._created = False
         signals.post_save.send(self.__class__, document=self, created=created)
+        return self
 
     def cascade_save(self, *args, **kwargs):
         """Recursively saves any references / generic references on an object"""
@@ -270,6 +278,11 @@ class Document(BaseDocument):
         signals.pre_delete.send(self.__class__, document=self)
 
         try:
+            for field_name in self._meta['proxy_fields']:
+                proxy_class = self._meta['proxy_fields'][field_name]
+                if hasattr(proxy_class, 'delete'):
+                    proxy = getattr(self, field_name)
+                    proxy.delete()
             self.__class__.objects(pk=self.pk).delete(safe=safe)
         except pymongo.errors.OperationFailure, err:
             message = u'Could not delete document (%s)' % err.message
@@ -333,6 +346,13 @@ class Document(BaseDocument):
         object.
         """
         cls._meta['delete_rules'][(document_cls, field_name)] = rule
+
+    @classmethod
+    def register_proxy_field(cls, field_name, proxy_class):
+        """This method registers fields with proxy classes to delete them when
+        removing this object.
+        """
+        cls._meta['proxy_fields'][field_name] = proxy_class
 
     @classmethod
     def drop_collection(cls):
